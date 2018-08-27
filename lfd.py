@@ -10,6 +10,8 @@ import codecs
 import pm
 import tarfile
 import zipfile
+import convert
+from debug import debug
 PID = os.getpid()
 import cmdw
 MAX_WIDTH = cmdw.getWidth()
@@ -149,7 +151,7 @@ class lfd(object):
                                 print "FOUND LINK:", link
                                 return link, name, find_packages_name
                 else:
-                    return ''
+                    return '','',''
 
     def find_localstorage(python_version, architecture, packages_list):
         for i in packages_list:
@@ -243,14 +245,20 @@ class lfd(object):
         if path == ".":
             path = os.getcwd()
         packages = self.identify_localstorage(path)
+        self.database().truncate('packages')
+        self.database().truncate('localstorage')
         for i in packages:
             description = self.get_readme(packages.get(i)[0])
-            self.database((i, description, packages.get(i)))
+            self.database((i, description, packages.get(i))).insert()
 
     def get_name_localstorage(self, package):
         p = self.pm()
         package = os.path.basename(package)
-        return p.translate(package).lower()
+        name = p.translate(package)
+        if name:
+            return name.lower()
+        else:
+            return ''
 
     def identify_localstorage(self, path=None):
         config = configset.configset()
@@ -261,8 +269,8 @@ class lfd(object):
             path = os.getenv('PACKAGES_DIR')
         if config.read_config('PACKAGES', 'dir', value='.'):
             path = config.read_config('PACKAGES', 'dir', value='.')
-        if path_name:
-            path = path_name
+        # if path_name:
+        #     path = path_name
         if path == ".":
             path = os.getcwd()
         if path == None:
@@ -285,9 +293,10 @@ class lfd(object):
                 if FILES:
                     for i in FILES:
                         name = self.get_name_localstorage(i)
-                        if not dir_dict.get(name):
-                            dir_dict.update({name: []})
-                        dir_dict.get(name).append(os.path.join(ROOT, i))
+                        if name:
+                            if not dir_dict.get(name):
+                                dir_dict.update({name: []})
+                            dir_dict.get(name).append(os.path.join(ROOT, i))
 
         def win():
             if " " in path:
@@ -297,9 +306,10 @@ class lfd(object):
             for i in listdir:
                 i_name = os.path.basename(i)
                 name = self.get_name_localstorage(i_name)
-                if not dir_dict.get(name):
-                    dir_dict.update({name: []})
-                dir_dict.get(name).append(i)
+                if name:
+                    if not dir_dict.get(name):
+                        dir_dict.update({name: []})
+                    dir_dict.get(name).append(i)
 
         if MODE == 'walk':
             walk()
@@ -309,7 +319,8 @@ class lfd(object):
             walk()
         return dir_dict
 
-    def database(self, datas=None):
+    def database(self, datas=None, type='storage', table_name = None):
+        #type: storage | database
         config = configset.configset()
         config.configname = 'lfd.ini'
         dbname = config.read_config('DATABASE', 'name', value='lfd.db3')
@@ -339,23 +350,48 @@ class lfd(object):
                        'id' INTEGER PRIMARY KEY  AUTOINCREMENT, \
                        'name' VARCHAR(255) NOT NULL, \
                        'description' VARCHAR(255) NOT NULL, \
-                       'relpath' VARCHAR(255) NOT NULL)'''
+                       'relpath' VARCHAR(255) NOT NULL);'''
+            SQL_CREATE_REPO = '''CREATE TABLE IF NOT EXISTS localstorage ( \
+                       'total' VARCHAR(255) NOT NULL, \
+                       'packages' VARCHAR(255) NOT NULL);'''
+            SQL_DROP = "DROP TABLE %s;" % (table_name)
             conn = sqlite.connect(dbname)
             cursor = conn.cursor()
-            cursor.execute(SQL_CREATE)
-            conn.commit()
-            if datas:
-                SQL_INSERT = 'INSERT INTO packages (\'name\', \'description\', \'relpath\') VALUES("%s", "%s", "%s");' % (
-                    datas[0], datas[1], unicode(datas[2]).encode('utf-8'))
-                try:
-                    print "SQL_INSERT =", SQL_INSERT
-                    cursor.execute(SQL_INSERT)
-                    conn.commit()
-                except:
-                    SQL_INSERT = "INSERT INTO packages ('name', 'relpath') VALUES('%s', '%s');" % (
-                        datas[0], datas[2])
-                    cursor.execute(SQL_INSERT)
-                    conn.commit()
+            def create():
+                cursor.execute(SQL_CREATE)
+                conn.commit()
+                cursor.execute(SQL_CREATE_REPO)
+                conn.commit()
+            def get(table_name):
+                exc01 = cursor.execute('SELECT * FROM %s;'%(table_name))
+                conn.commit()
+                return exc01.fetchall()
+            def insert():
+                if datas:
+                    SQL_INSERT = 'INSERT INTO packages (\'name\', \'description\', \'relpath\') VALUES("%s", "%s", "%s");' % (
+                            datas[0], convert.convert(datas[1]), convert.convert(datas[2]))
+                    SQL_INSERT_LOCALSTORAGE = 'INSERT INTO localstorage (\'total\', \'packages\') VALUES("%s", "%s");' % (
+                                   datas[0], convert.convert(datas[1]))
+                    try:
+                        # print "SQL_INSERT =", SQL_INSERT
+                        if type == 'storage':
+                            cursor.execute(SQL_INSERT_LOCALSTORAGE)	
+                        elif type == 'database':
+                            cursor.execute(SQL_INSERT)
+                        conn.commit()
+                    except:
+                        if type == 'database':
+                            SQL_INSERT = "INSERT INTO packages ('name', 'relpath') VALUES('%s', '%s');" % (datas[0], convert.convert(datas[2]))
+                        cursor.execute(SQL_INSERT)
+                        conn.commit()
+            def truncate(table_name):
+                cursor.execute('DELETE FROM %s;'%(table_name))
+                conn.commit()
+                cursor.execute('VACUUM;')
+                conn.commit()
+            def drop():
+                cursor.execute(SQL_DROP)
+                conn.commit()
 
         elif dbtype == 'mysql':
             SQL_CREATE = '''CREATE TABLE IF NOT EXISTS packages ( \
